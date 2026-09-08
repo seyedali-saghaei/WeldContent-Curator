@@ -13,10 +13,6 @@ See selected welding content published by the workflow:
 
 - Telegram: [Welding News FA](https://t.me/Welding_News_FA)
 
-## Live channel
-
-The workflow supports [Welding News FA](https://t.me/Welding_News_FA), a Persian-language Telegram community with more than 10,000 members. The channel is the real-world publishing destination for curated welding news, practical media, and industry content.
-
 ## What it does
 
 - Collects welding content from Google News RSS, the Fronius Welding Blog, YouTube, and GIPHY
