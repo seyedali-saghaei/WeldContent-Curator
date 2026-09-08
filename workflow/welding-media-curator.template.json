@@ -1,0 +1,1647 @@
+{
+  "name": "AI Welding Media Curator",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=welding%20video%20OR%20welding%20project%20OR%20welding%20photo&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "name": "RSS - Google News Welding Visual",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        -20368,
+        1744
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://blog.fronius.com/welding/en/feed/",
+        "options": {}
+      },
+      "name": "RSS - Fronius Welding Blog",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        -20368,
+        2128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const item of items) {\n  const gifs = item.json.data || [];\n  for (const g of gifs) {\n    out.push({\n      json: {\n        dedup_key: `giphy:${g.id}`,\n        source_type: 'giphy',\n        source_category: 'gif',\n        media_type: 'gif',\n        source_name: 'GIPHY',\n        title: g.title || 'Welding GIF',\n        summary: g.title || '',\n        content: g.title || '',\n        url: g.url || '',\n        link: g.url || '',\n        media_url: g.images?.original?.url || g.images?.downsized?.url || '',\n        image_url: g.images?.downsized_still?.url || g.images?.original_still?.url || '',\n        thumbnail_url: g.images?.fixed_width_small_still?.url || '',\n        published_at: g.import_datetime || '',\n        author: g.username || '',\n        score: 0,\n        comments: 0,\n        raw: g\n      }\n    });\n  }\n}\nreturn out;"
+      },
+      "name": "Normalize - GIPHY GIFs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -19248,
+        1376
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const j = item.json || {};\n  const nodeName = $prevNode.name || 'RSS';\n  const html = j.content || j.description || '';\n  const imgMatch = String(html).match(/<img[^>]+src=[\\\"']([^\\\"']+)[\\\"']/i);\n  const image = j.enclosure?.url || (imgMatch ? imgMatch[1] : '');\n\n  // Build a stable key without query strings or tracking parameters.\n  function canonicalize(url) {\n    if (!url) return '';\n    try {\n      const u = new URL(url);\n      return (u.origin + u.pathname).toLowerCase().replace(/\\/+$/, '');\n    } catch (e) {\n      return String(url).split('?')[0].toLowerCase();\n    }\n  }\n  const rawLink = j.link || j.guid || '';\n  const dedupKey = j.guid ? `rss:guid:${j.guid}` : `rss:${canonicalize(rawLink)}`;\n\n  return {\n    json: {\n      dedup_key: dedupKey,\n      source_type: 'rss',\n      source_category: nodeName.includes('Google News') ? 'google_news' : 'rss',\n      media_type: image ? 'image' : 'text',\n      source_name: nodeName.replace(/^RSS - /, ''),\n      title: j.title || '',\n      summary: j.contentSnippet || j.content || j.description || '',\n      content: j.contentSnippet || j.content || j.description || '',\n      url: rawLink,\n      link: rawLink,\n      media_url: image,\n      image_url: image,\n      thumbnail_url: image,\n      published_at: j.isoDate || j.pubDate || '',\n      author: j.creator || j.author || '',\n      raw: j\n    }\n  };\n});"
+      },
+      "name": "Normalize - RSS Text Image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -19696,
+        1840
+      ]
+    },
+    {
+      "parameters": {},
+      "name": "Merge - YouTube and GIPHY",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -19024,
+        1280
+      ]
+    },
+    {
+      "parameters": {},
+      "name": "Merge - All Media Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -18800,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": "=dedup_key",
+        "options": {}
+      },
+      "name": "Remove Duplicates - Media URL",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        -18576,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const keywords = [\n  'welding','weld','welder','tig','mig','stick',\n  'fabrication','metalworking','safety','ppe',\n  'mistake','fail','repair','project','robot','laser',\n  'pipe','bead','porosity','undercut','stainless','aluminum',\n  'meme','funny','shop','workshop','inspection'\n];\n\nfunction containsAny(text, arr) {\n  return arr.some(k => text.includes(k));\n}\n\nfunction scoreItem(item) {\n  const j = item.json;\n  const text = `${j.title || ''} ${j.summary || ''} ${j.content || ''}`.toLowerCase();\n\n  const keyword_hits = keywords.filter(k => text.includes(k)).length;\n  const social = Number(j.score || 0) + Number(j.comments || 0);\n  const social_boost = Math.min(2.5, Math.log10(social + 1));\n\n  let media_score = 0;\n  if (j.media_type === 'youtube') media_score = 8.5;\n  else if (j.media_type === 'video') media_score = 9;\n  else if (j.media_type === 'gif') media_score = 7.4;\n  else if (j.media_type === 'image') media_score = 6.5;\n  else media_score = 4;\n\n  let source_boost = 0;\n  if (j.source_type === 'youtube') source_boost = 1.4;\n  else if (j.source_type === 'rss') source_boost = 1.1;\n  else if (j.source_type === 'giphy') source_boost = 0.5;\n  else if (j.source_type === 'pexels') source_boost = -1.5;\n  else if (j.source_type === 'pixabay') source_boost = -1.5;\n\n  let intent_boost = 0;\n\n  if (containsAny(text, ['mistake','fail','porosity','undercut','repair','inspection'])) {\n    intent_boost += 1.5;\n  }\n\n  if (containsAny(text, ['safety','ppe','helmet','gloves','fume','fire'])) {\n    intent_boost += 1.4;\n  }\n\n  if (containsAny(text, ['meme','funny','welder life','shop humor'])) {\n    intent_boost += 1.2;\n  }\n\n  if (containsAny(text, ['robot','laser','automation','cnc'])) {\n    intent_boost += 1.1;\n  }\n\n  if (containsAny(text, ['tips','technique','how to','tutorial'])) {\n    intent_boost += 1.3;\n  }\n\n  const has_media = j.media_url || j.image_url || j.thumbnail_url;\n\n  const final_score = Math.min(\n    10,\n    media_score * 0.42 +\n    keyword_hits * 0.45 +\n    social_boost +\n    source_boost +\n    intent_boost +\n    (has_media ? 0.8 : 0)\n  );\n\n  return {\n    json: {\n      ...j,\n      keyword_hits,\n      social_score: social,\n      intent_boost,\n      media_rank_score: Number(final_score.toFixed(2))\n    }\n  };\n}\n\nconst ranked = items\n  .map(scoreItem)\n  .filter(item => item.json.media_rank_score >= 7)\n  .sort((a, b) => b.json.media_rank_score - a.json.media_rank_score);\n\nconst youtube = ranked.filter(i => i.json.media_type === 'youtube');\nconst gifs = ranked.filter(i => i.json.media_type === 'gif');\nconst videos = ranked.filter(i => i.json.media_type === 'video');\nconst images = ranked.filter(i => i.json.media_type === 'image');\nconst text = ranked.filter(i => !['youtube','gif','video','image'].includes(i.json.media_type));\n\nlet selected = [\n  ...youtube.slice(0, 1),\n  ...gifs.slice(0, 1),\n  ...videos.slice(0, 1)\n];\n\nconst selectedKeys = new Set(\n  selected.map(i => i.json.url || i.json.media_url || i.json.title)\n);\n\nfor (const candidate of [...ranked, ...images, ...text]) {\n  if (selected.length >= 2) break;\n\n  const key = candidate.json.url || candidate.json.media_url || candidate.json.title;\n\n  if (!selectedKeys.has(key)) {\n    selected.push(candidate);\n    selectedKeys.add(key);\n  }\n}\n\nreturn selected.slice(0, 2);"
+      },
+      "name": "Rank Media Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -18128,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const p = item.json;\n\n  const mediaLabelMap = {\n    youtube: 'ویدیو',\n    video: 'ویدیو',\n    gif: 'GIF',\n    image: 'تصویر'\n  };\n  const mediaLabel = mediaLabelMap[p.media_type] || 'مقاله/خبر';\n\n  const prompt = `تو کیوریتور یک کانال تلگرام فارسی برای جامعه جهانی جوشکاری هستی. این محتوا رسانه‌ای است و باید برای جوشکارها جذاب، کاربردی یا آموزشی باشد.\n\nقوانین:\n- فقط JSON معتبر بده.\n- فقط فارسی طبیعی بنویس.\n- اگر محتوا بی‌ارزش، تبلیغاتی، نامرتبط یا ناایمن است publish=false بده.\n- اگر منتشر می‌کنی overall_score باید 7 تا 10 باشد.\n- متن تلگرام کوتاه، کارگاهی و قابل فهم باشد.\n- نوع دقیق رسانهٔ این پست «${mediaLabel}» است. در سراسر متن (به‌خصوص در بخش «چه می‌بینیم؟») فقط و فقط از کلمهٔ «${mediaLabel}» برای اشاره به این محتوا استفاده کن.\n- اگر نوع رسانه «${mediaLabel}» برابر «تصویر» یا «مقاله/خبر» است، هرگز از کلمات «ویدیو»، «این ویدیو»، «کلیپ» یا مشابه آن استفاده نکن.\n- اگر نوع رسانه «مقاله/خبر» است، به‌جای «چه می‌بینیم؟» به این محتوا به‌عنوان یک مطلب/خبر اشاره کن، نه یک رسانهٔ تصویری.\n- لینک خام را در متن ننویس.\n- هرگز URL یا لینک خام را داخل telegram_text ننویس.\n- بخش «منبع» را اصلاً ننویس.\n- Footer توسط سیستم اضافه می‌شود.\n- خروجی telegram_text فقط متن اصلی پست باشد.\n\nساختار خروجی:\n{\n  \"publish\": true,\n  \"overall_score\": 0,\n  \"telegram_text\": \"...\"\n}\n\nاطلاعات:\nTitle: ${p.title || ''}\nSource: ${p.source_name || p.source_type || ''}\nMedia type: ${mediaLabel}\nLink: ${p.link || p.url || ''}\nMedia URL: ${p.media_url || p.image_url || p.thumbnail_url || ''}\nContent: ${p.content || p.summary || ''}\n\nفرمت telegram_text:\n🔥 عنوان کوتاه\n\nچه می‌بینیم؟\n...\n\nچرا برای جوشکار مهم است؟\n...\n\nنکته عملی:\n...\n\nسؤال بحث:\n...\n\n#جوشکاری #Welding #ایمنی_جوشکاری\n`;\n\n  return {\n    json: {\n      ...p,\n      prompt\n    }\n  };\n\n});"
+      },
+      "name": "Build Persian Media Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -17680,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  model: \"gpt-4o-mini\",\n  messages: [\n    {\n      role: \"system\",\n      content: \"تو کیوریتور فارسی کانال تلگرام جوشکاری هستی. خروجی فقط JSON معتبر بده.\"\n    },\n    {\n      role: \"user\",\n      content: $json.prompt\n    }\n  ],\n  temperature: 0.35\n}\n}}",
+        "options": {
+          "redirect": {
+            "redirect": {}
+          },
+          "response": {
+            "response": {}
+          }
+        }
+      },
+      "name": "OpenAI - Media Curator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -17232,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function escapeTelegramHtml(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;');\n}\n\nreturn items.map((item, i) => {\n  const original = $('Final Safety Limit - Max 2 Before OpenAI').all()[i]?.json || {};\n  const raw = item.json.choices?.[0]?.message?.content || '';\n\n  let parsed;\n  try {\n    parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());\n  } catch (error) {\n    parsed = { publish: false, overall_score: 0, telegram_text: '' };\n  }\n\n  const cleanedText = String(parsed.telegram_text || '')\n    .replace(/منبع[:：]?\\s*\\(?https?:\\/\\/[^\\s)]+\\)?/gi, '')\n    .replace(/https?:\\/\\/\\S+/g, '')\n    .trim();\n\n  return {\n    json: {\n      ...original,\n      ...parsed,\n      telegram_text: escapeTelegramHtml(cleanedText).slice(0, 950)\n    }\n  };\n});"
+      },
+      "name": "Parse AI Media JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -17008,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "pub",
+              "leftValue": "={{$json.publish}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "score",
+              "leftValue": "={{$json.overall_score}}",
+              "rightValue": 7,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF Publish Media >= 7",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -16560,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "video",
+              "leftValue": "={{$json.media_type}}",
+              "rightValue": "video",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "yt",
+              "leftValue": "={{$json.media_type}}",
+              "rightValue": "youtube",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "name": "IF Media is Video or YouTube",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -16336,
+        1568
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "gif",
+              "leftValue": "={{$json.media_type}}",
+              "rightValue": "gif",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF Media is GIF",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -16112,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "img",
+              "leftValue": "={{$json.media_type}}",
+              "rightValue": "image",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF Media is Image",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -15888,
+        1760
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{\n$json.media_type === 'youtube'\n? \"https://api.telegram.org/botREPLACE_WITH_TELEGRAM_BOT_TOKEN/sendMessage\"\n: \"https://api.telegram.org/botREPLACE_WITH_TELEGRAM_BOT_TOKEN/sendVideo\"\n}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n$json.media_type === 'youtube'\n? {\n    chat_id: \"REPLACE_WITH_TELEGRAM_CHAT_ID\",\n    text: $json.telegram_text,\n    parse_mode: \"HTML\",\n    link_preview_options: {\n      is_disabled: false,\n      url: $json.media_url || $json.link,\n      prefer_large_media: true,\n      show_above_text: true\n    }\n  }\n: {\n    chat_id: \"REPLACE_WITH_TELEGRAM_CHAT_ID\",\n    video: $json.media_url,\n    caption: $json.telegram_text,\n    parse_mode: \"HTML\"\n  }\n}}",
+        "options": {}
+      },
+      "name": "Telegram - Send Video or YouTube Link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -15888,
+        1280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botREPLACE_WITH_TELEGRAM_BOT_TOKEN/sendAnimation",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  chat_id: \"REPLACE_WITH_TELEGRAM_CHAT_ID\",\n  animation: $json.media_url || $json.image_url,\n  caption: $json.telegram_text,\n  parse_mode: \"HTML\"\n}\n}}",
+        "options": {}
+      },
+      "name": "Telegram - Send GIF Animation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -15664,
+        1472
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botREPLACE_WITH_TELEGRAM_BOT_TOKEN/sendPhoto",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  chat_id: \"REPLACE_WITH_TELEGRAM_CHAT_ID\",\n  photo: $json.media_url || $json.image_url || $json.thumbnail_url,\n  caption: $json.telegram_text,\n  parse_mode: \"HTML\"\n}\n}}",
+        "options": {}
+      },
+      "name": "Telegram - Send Photo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -15440,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botREPLACE_WITH_TELEGRAM_BOT_TOKEN/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  chat_id: \"REPLACE_WITH_TELEGRAM_CHAT_ID\",\n text: $json.telegram_text ,\n \"parse_mode\": \"HTML\",\n  disable_web_page_preview: true\n}\n}}",
+        "options": {}
+      },
+      "name": "Telegram - Send Text Fallback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -15440,
+        1856
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => ({ json: { skipped: true, reason: 'publish=false or score below 7', data: item.json } }));"
+      },
+      "name": "Log Skipped Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16336,
+        1760
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=%22welding%20safety%22%20OR%20%22welding%20PPE%22&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "name": "RSS - Google News Welding Safety",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        -20368,
+        1936
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=%22robotic%20welding%22%20OR%20%22laser%20welding%22&hl=en-US&gl=US&ceid=US:en",
+        "options": {}
+      },
+      "name": "RSS - Google News Robotic Welding",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        -20368,
+        1552
+      ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -15664,
+        1856
+      ],
+      "name": "Delivery Delay - Text"
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -15664,
+        1664
+      ],
+      "name": "Delivery Delay - Photo"
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -15888,
+        1472
+      ],
+      "name": "Delivery Delay - GIF"
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -16112,
+        1280
+      ],
+      "name": "Delivery Delay - Video"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeHttpUrl(value) {\n  try {\n    const url = new URL(String(value || ''));\n    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';\n  } catch (error) {\n    return '';\n  }\n}\n\nfunction escapeHtmlAttribute(value) {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/\"/g, '&quot;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;');\n}\n\nreturn items.map(item => {\n  const source = safeHttpUrl(item.json.link || item.json.url || item.json.media_url);\n  const sourceLine = source\n    ? `\\n🌐 <a href=\"${escapeHtmlAttribute(source)}\">منبع</a>`\n    : '';\n\n  item.json.telegram_text += `\n\n************\n📢 <a href=\"https://t.me/Welding_News_FA\">Welding News FA</a>${sourceLine}`;\n  return item;\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16784,
+        1664
+      ],
+      "name": "Add Telegram Footer"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 6,8,11,13,16,18,21 * * *"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0 30 9,14,19 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -20592,
+        1648
+      ],
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read-only filter. Publication records are written only after Telegram confirms delivery.\nconst historyRows = $('Read Published History').all();\nconst seen = new Set(historyRows.map(r => r.json.dedup_key).filter(Boolean));\n\nconst fresh = [];\nfor (const item of items) {\n  const key = item.json.dedup_key;\n  if (!key) continue;\n  if (!seen.has(key)) {\n    fresh.push(item);\n  }\n}\nreturn fresh;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -18352,
+        1664
+      ],
+      "name": "Skip Already Published"
+    },
+    {
+      "parameters": {
+        "jsCode": "const topics = [\n  \"TIG welding\",\n  \"MIG welding\",\n  \"Stick welding\",\n  \"Pipe welding\",\n  \"Laser welding\",\n  \"Robotic welding\",\n  \"Fabrication\",\n  \"Workshop\",\n  \"Welder\",\n  \"Metalworking\",\n  \"Aluminum welding\",\n  \"Stainless welding\",\n  \"Welding safety\",\n  \"Welding inspection\",\n  \"Repair welding\"\n];\n\nconst intents = [\n  \"tips\",\n  \"mistakes\",\n  \"fail\",\n  \"repair\",\n  \"project\",\n  \"technique\",\n  \"tutorial\",\n  \"review\",\n  \"comparison\",\n  \"challenge\",\n  \"funny\",\n  \"amazing\",\n  \"beginner\",\n  \"professional\"\n];\n\nconst modifiers = [\n  \"\",\n  \"\",\n  \"\",\n  \"2026\",\n  \"shorts\",\n  \"viral\",\n  \"real workshop\",\n  \"factory\",\n  \"field\",\n  \"industrial\"\n];\n\nfunction random(arr) {\n  return arr[Math.floor(Math.random() * arr.length)];\n}\n\nconst queries = new Set();\n\nwhile (queries.size < 2) {\n\n  let q = `${random(topics)} ${random(intents)} ${random(modifiers)}`\n      .replace(/\\s+/g,\" \")\n      .trim();\n\n  queries.add(q);\n}\n\nreturn [...queries].map(q => ({\n  json:{\n    search_query:q\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20368,
+        1280
+      ],
+      "name": "Build Dynamic Welding Topics"
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "REPLACE_WITH_YOUTUBE_API_KEY"
+            },
+            {
+              "name": "part",
+              "value": "snippet"
+            },
+            {
+              "name": "q",
+              "value": "={{$json.search_query}}"
+            },
+            {
+              "name": "type",
+              "value": "video"
+            },
+            {
+              "name": "order",
+              "value": "relevance"
+            },
+            {
+              "name": "maxResults",
+              "value": "2"
+            },
+            {
+              "name": "videoEmbeddable",
+              "value": "true"
+            },
+            {
+              "name": "safeSearch",
+              "value": "moderate"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "name": "YouTube - Dynamic Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -19920,
+        1184
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.giphy.com/v1/gifs/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "REPLACE_WITH_GIPHY_API_KEY"
+            },
+            {
+              "name": "q",
+              "value": "={{$json.search_query}}"
+            },
+            {
+              "name": "limit",
+              "value": "5"
+            },
+            {
+              "name": "rating",
+              "value": "pg"
+            },
+            {
+              "name": "lang",
+              "value": "en"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "name": "GIPHY - Dynamic Welding GIFs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -19472,
+        1376
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ids = [];\n\nfor (const item of items) {\n  const list = item.json.items || [];\n\n  for (const v of list) {\n    const videoId = v.id?.videoId;\n    if (!videoId) continue;\n    ids.push(videoId);\n  }\n}\n\nconst uniqueIds = [...new Set(ids)].slice(0, 50);\n\nreturn [\n  {\n    json: {\n      video_ids: uniqueIds.join(',')\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -19696,
+        1184
+      ],
+      "name": "Extract YouTube Video IDs"
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/videos",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "REPLACE_WITH_YOUTUBE_API_KEY"
+            },
+            {
+              "name": "part",
+              "value": "snippet,contentDetails,statistics"
+            },
+            {
+              "name": "id",
+              "value": "={{$json.video_ids}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "name": "YouTube - Video Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -19472,
+        1184
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\n\nfor (const item of items) {\n  const list = item.json.items || [];\n\n  if (!Array.isArray(list) || list.length === 0) {\n    continue;\n  }\n\n  for (const v of list) {\n    const sn = v.snippet || {};\n    const stats = v.statistics || {};\n    const details = v.contentDetails || {};\n    const videoId = v.id || item.json.video_id || '';\n\n    if (!videoId) continue;\n\n    out.push({\n      json: {\n        dedup_key: `youtube:${videoId}`,\n        source_type: 'youtube',\n        source_category: 'video',\n        media_type: 'youtube',\n        source_name: 'YouTube',\n\n        title: sn.title || '',\n        summary: sn.description || '',\n        content: sn.description || '',\n\n        url: `https://www.youtube.com/watch?v=${videoId}`,\n        link: `https://www.youtube.com/watch?v=${videoId}`,\n        media_url: `https://www.youtube.com/watch?v=${videoId}`,\n\n        image_url: sn.thumbnails?.high?.url || sn.thumbnails?.medium?.url || sn.thumbnails?.default?.url || '',\n        thumbnail_url: sn.thumbnails?.high?.url || sn.thumbnails?.medium?.url || sn.thumbnails?.default?.url || '',\n\n        published_at: sn.publishedAt || '',\n        author: sn.channelTitle || '',\n\n        youtube_video_id: videoId,\n        youtube_duration: details.duration || '',\n        youtube_view_count: Number(stats.viewCount || 0),\n        youtube_like_count: Number(stats.likeCount || 0),\n        youtube_comment_count: Number(stats.commentCount || 0),\n\n        score:\n          Number(stats.viewCount || 0) * 0.001 +\n          Number(stats.likeCount || 0) * 0.05 +\n          Number(stats.commentCount || 0) * 0.2,\n\n        raw: v\n      }\n    });\n  }\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -19248,
+        1184
+      ],
+      "name": "Normalize - YouTube Details"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -20144,
+        1184
+      ],
+      "name": "Rate Limit - YouTube Search"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PublishedMedia",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -20368,
+        1088
+      ],
+      "name": "Read Published History"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -20144,
+        1648
+      ],
+      "name": "Merge RSS - Robotics and Visual"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -20144,
+        2032
+      ],
+      "name": "Merge RSS - Safety and Fronius"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -19920,
+        1840
+      ],
+      "name": "Merge - All RSS Sources"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PublishedMedia",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "title": "={{ $('Add Telegram Footer').item.json.title }}",
+            "dedup_key": "={{ $('Add Telegram Footer').item.json.dedup_key }}",
+            "published_at": "={{ $now.toISO() }}",
+            "source_type": "={{ $('Add Telegram Footer').item.json.source_type }}",
+            "telegram_preview ": "={{ $json.result.text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "dedup_key",
+              "displayName": "dedup_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source_type",
+              "displayName": "source_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_preview ",
+              "displayName": "telegram_preview ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "published_at",
+              "displayName": "published_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -15664,
+        1280
+      ],
+      "name": "Append row in sheet Video"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PublishedMedia",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "title": "={{ $('Add Telegram Footer').item.json.title }}",
+            "dedup_key": "={{ $('Add Telegram Footer').item.json.dedup_key }}",
+            "published_at": "={{ $now.toISO() }}",
+            "source_type": "={{ $('Add Telegram Footer').item.json.source_type }}",
+            "telegram_preview ": "={{ $json.result.text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "dedup_key",
+              "displayName": "dedup_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source_type",
+              "displayName": "source_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_preview ",
+              "displayName": "telegram_preview ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "published_at",
+              "displayName": "published_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -15440,
+        1472
+      ],
+      "name": "Append row in sheet GIF Animation"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PublishedMedia",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "title": "={{ $('Add Telegram Footer').item.json.title }}",
+            "dedup_key": "={{ $('Add Telegram Footer').item.json.dedup_key }}",
+            "published_at": "{{ $now.toISO() }}",
+            "source_type": "={{ $('Add Telegram Footer').item.json.source_type }}",
+            "telegram_preview ": "={{ $json.result.text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "dedup_key",
+              "displayName": "dedup_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source_type",
+              "displayName": "source_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_preview ",
+              "displayName": "telegram_preview ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "published_at",
+              "displayName": "published_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -15216,
+        1664
+      ],
+      "name": "Append row in sheet Photo"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PublishedMedia",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "title": "={{ $('Add Telegram Footer').item.json.title }}",
+            "dedup_key": "={{ $('Add Telegram Footer').item.json.dedup_key }}",
+            "published_at": "={{ $now.toISO() }}",
+            "source_type": "={{ $('Add Telegram Footer').item.json.source_type }}",
+            "telegram_preview ": "={{ $json.result.text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "dedup_key",
+              "displayName": "dedup_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source_type",
+              "displayName": "source_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_preview ",
+              "displayName": "telegram_preview ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "published_at",
+              "displayName": "published_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -15216,
+        1856
+      ],
+      "name": "Append row in sheet Text"
+    },
+    {
+      "parameters": {
+        "maxItems": 2
+      },
+      "name": "Limit - Top 2 Media",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -17904,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "maxItems": 2
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -17456,
+        1664
+      ],
+      "name": "Final Safety Limit - Max 2 Before OpenAI"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "RSS - Google News Welding Visual": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS - Robotics and Visual",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "RSS - Fronius Welding Blog": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS - Safety and Fronius",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Normalize - GIPHY GIFs": {
+      "main": [
+        [
+          {
+            "node": "Merge - YouTube and GIPHY",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - YouTube and GIPHY": {
+      "main": [
+        [
+          {
+            "node": "Merge - All Media Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize - RSS Text Image": {
+      "main": [
+        [
+          {
+            "node": "Merge - All Media Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - All Media Sources": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicates - Media URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicates - Media URL": {
+      "main": [
+        [
+          {
+            "node": "Skip Already Published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank Media Candidates": {
+      "main": [
+        [
+          {
+            "node": "Limit - Top 2 Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Persian Media Prompt": {
+      "main": [
+        [
+          {
+            "node": "Final Safety Limit - Max 2 Before OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Media Curator": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Media JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Media JSON": {
+      "main": [
+        [
+          {
+            "node": "Add Telegram Footer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Publish Media >= 7": {
+      "main": [
+        [
+          {
+            "node": "IF Media is Video or YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Skipped Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Media is Video or YouTube": {
+      "main": [
+        [
+          {
+            "node": "Delivery Delay - Video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Media is GIF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Media is GIF": {
+      "main": [
+        [
+          {
+            "node": "Delivery Delay - GIF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Media is Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Media is Image": {
+      "main": [
+        [
+          {
+            "node": "Delivery Delay - Photo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delivery Delay - Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS - Google News Welding Safety": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS - Safety and Fronius",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS - Google News Robotic Welding": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS - Robotics and Visual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delivery Delay - Text": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Text Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delivery Delay - Photo": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delivery Delay - GIF": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send GIF Animation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delivery Delay - Video": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Video or YouTube Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Telegram Footer": {
+      "main": [
+        [
+          {
+            "node": "IF Publish Media >= 7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "RSS - Google News Welding Visual",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS - Google News Welding Safety",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS - Google News Robotic Welding",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS - Fronius Welding Blog",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Dynamic Welding Topics",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Published History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Already Published": {
+      "main": [
+        [
+          {
+            "node": "Rank Media Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dynamic Welding Topics": {
+      "main": [
+        [
+          {
+            "node": "GIPHY - Dynamic Welding GIFs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Rate Limit - YouTube Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube - Dynamic Search": {
+      "main": [
+        [
+          {
+            "node": "Extract YouTube Video IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GIPHY - Dynamic Welding GIFs": {
+      "main": [
+        [
+          {
+            "node": "Normalize - GIPHY GIFs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract YouTube Video IDs": {
+      "main": [
+        [
+          {
+            "node": "YouTube - Video Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube - Video Details": {
+      "main": [
+        [
+          {
+            "node": "Normalize - YouTube Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize - YouTube Details": {
+      "main": [
+        [
+          {
+            "node": "Merge - YouTube and GIPHY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit - YouTube Search": {
+      "main": [
+        [
+          {
+            "node": "YouTube - Dynamic Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Published History": {
+      "main": [
+        []
+      ]
+    },
+    "Telegram - Send Video or YouTube Link": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send GIF Animation": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet GIF Animation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send Photo": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send Text Fallback": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge RSS - Robotics and Visual": {
+      "main": [
+        [
+          {
+            "node": "Merge - All RSS Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge RSS - Safety and Fronius": {
+      "main": [
+        [
+          {
+            "node": "Merge - All RSS Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - All RSS Sources": {
+      "main": [
+        [
+          {
+            "node": "Normalize - RSS Text Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit - Top 2 Media": {
+      "main": [
+        [
+          {
+            "node": "Build Persian Media Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Safety Limit - Max 2 Before OpenAI": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Media Curator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
